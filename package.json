@@ -1,0 +1,8 @@
+{
+  "name": "ink-and-archives",
+  "version": "1.0.0",
+  "description": "Ink & Archives Digital Bookstore",
+  "dependencies": {
+    "stripe": "^14.0.0"
+  }
+}

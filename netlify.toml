@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────
+# Ink & Archives — Netlify Configuration
+# Place this file in your project root
+# ─────────────────────────────────────────────────────────────
+
+[build]
+  functions = "netlify/functions"
+  publish = "."
+
+[functions]
+  node_bundler = "esbuild"
+
+# Redirect all traffic to index (bookstore.html)
+[[redirects]]
+  from = "/"
+  to = "/bookstore.html"
+  status = 200
+
+# Allow function calls
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Methods = "POST, OPTIONS"
