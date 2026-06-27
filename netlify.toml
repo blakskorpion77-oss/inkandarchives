@@ -1,6 +1,5 @@
 # ─────────────────────────────────────────────────────────────
 # Ink & Archives — Netlify Configuration
-# Place this file in your project root
 # ─────────────────────────────────────────────────────────────
 
 [build]
@@ -9,12 +8,6 @@
 
 [functions]
   node_bundler = "esbuild"
-
-# Redirect all traffic to index (bookstore.html)
-[[redirects]]
-  from = "/"
-  to = "/bookstore.html"
-  status = 200
 
 # Allow function calls
 [[headers]]
