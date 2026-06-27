@@ -1,19 +1,24 @@
 // ─────────────────────────────────────────────────────────────
-// Ink & Archives — Stripe Webhook Handler
-// File: netlify/functions/stripe-webhook.js
-//
-// HOW TO USE:
-// 1. In Stripe Dashboard → Webhooks → Add endpoint:
-//    URL: https://inkandarchives.com/.netlify/functions/stripe-webhook
-//    Events: checkout.session.completed
-// 2. Copy the Webhook Signing Secret and add to Netlify env vars:
-//    STRIPE_WEBHOOK_SECRET = whsec_xxxx
-// 3. Add your email service API key (Mailgun/SendGrid):
-//    MAILGUN_API_KEY = your_key
-//    MAILGUN_DOMAIN = inkandarchives.com
+// Ink & Archives — Stripe Webhook + Zoho SMTP Email
+// Fires on: checkout.session.completed
+// Sends: order confirmation to customer + owner notification
 // ─────────────────────────────────────────────────────────────
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const nodemailer = require('nodemailer');
+
+// Zoho SMTP transporter
+function createTransporter() {
+  return nodemailer.createTransport({
+    host: process.env.ZOHO_SMTP_HOST || 'smtppro.zoho.eu',
+    port: parseInt(process.env.ZOHO_SMTP_PORT || '465'),
+    secure: true,
+    auth: {
+      user: process.env.ZOHO_SMTP_USER,
+      pass: process.env.ZOHO_SMTP_PASS
+    }
+  });
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -24,168 +29,160 @@ exports.handler = async (event) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let stripeEvent;
-
   try {
-    // Verify the webhook signature
-    stripeEvent = stripe.webhooks.constructEvent(
-      event.body,
-      sig,
-      webhookSecret
-    );
+    stripeEvent = stripe.webhooks.constructEvent(event.body, sig, webhookSecret);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return {
-      statusCode: 400,
-      body: `Webhook Error: ${err.message}`
-    };
+    console.error('Webhook signature error:', err.message);
+    return { statusCode: 400, body: `Webhook Error: ${err.message}` };
   }
 
-  // ── Handle checkout.session.completed ─────────────────────
   if (stripeEvent.type === 'checkout.session.completed') {
     const session = stripeEvent.data.object;
-
-    // Get customer email
     const customerEmail = session.customer_details?.email;
-    const bookIds = session.metadata?.bookIds || '';
-    const bundles = session.metadata?.bundles || '';
+    const customerName = session.customer_details?.name || 'Valued Reader';
+    const amount = (session.amount_total / 100).toFixed(2);
+    const currency = (session.currency || 'usd').toUpperCase();
+    const sessionId = session.id;
+    const ownerEmail = process.env.OWNER_EMAIL || 'hello@inkandarchives.com';
 
-    console.log(`Payment completed for: ${customerEmail}`);
-    console.log(`Books: ${bookIds}`);
-    console.log(`Bundles: ${bundles}`);
+    console.log(`Payment completed: ${customerEmail} — ${currency} ${amount}`);
 
-    // ── Send download email ────────────────────────────────
-    // Option 1: Mailgun (recommended)
-    if (process.env.MAILGUN_API_KEY && customerEmail) {
-      await sendDownloadEmail(customerEmail, bookIds, bundles, session.id);
-    }
+    const transporter = createTransporter();
 
-    // ── Log the sale ───────────────────────────────────────
-    // You can store this in a database (Supabase, Airtable, etc.)
-    // Since you already use Supabase for ClientTech, you could add it there
-    // Example:
-    // await logSale(customerEmail, bookIds, bundles, session.amount_total);
+    // ── Customer confirmation email ──────────────────────────
+    const customerHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body{font-family:Georgia,serif;background:#fdfbf7;margin:0;padding:0}
+  .wrap{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  .head{background:#1a2035;padding:32px 24px;text-align:center}
+  .head h1{color:#c9a84c;font-size:26px;margin:0 0 4px;letter-spacing:1px}
+  .head p{color:#8a9ab5;font-size:12px;margin:0;letter-spacing:2px;text-transform:uppercase}
+  .body{padding:32px 28px}
+  .body h2{color:#1a2035;font-size:20px;margin:0 0 16px}
+  .body p{font-family:Arial,sans-serif;font-size:14px;color:#444;line-height:1.6;margin:0 0 14px}
+  .order-box{background:#faf7f2;border:1px solid #e0d8c8;border-radius:8px;padding:18px 20px;margin:20px 0}
+  .order-box p{margin:6px 0;font-family:Arial,sans-serif;font-size:13px;color:#555}
+  .order-box strong{color:#1a2035}
+  .download-btn{display:block;background:#e8621a;color:#fff;text-decoration:none;text-align:center;padding:14px 24px;border-radius:8px;font-family:Arial,sans-serif;font-weight:700;font-size:15px;margin:24px 0}
+  .divider{border:none;border-top:1px solid #eee;margin:24px 0}
+  .step{display:flex;gap:12px;align-items:flex-start;margin-bottom:14px}
+  .step-num{background:#1a2035;color:#c9a84c;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;font-family:Arial,sans-serif;line-height:28px;text-align:center}
+  .step-text{font-family:Arial,sans-serif;font-size:13px;color:#555;line-height:1.5;padding-top:4px}
+  .footer{background:#1a2035;padding:20px;text-align:center}
+  .footer p{color:#8a9ab5;font-family:Arial,sans-serif;font-size:11px;margin:4px 0}
+  .footer a{color:#c9a84c}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>INK &amp; ARCHIVES</h1>
+    <p>Order Confirmation</p>
+  </div>
+  <div class="body">
+    <h2>Thank you, ${customerName}! &#128214;</h2>
+    <p>Your order has been confirmed and your books are ready to download. We hope you enjoy every page.</p>
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ received: true })
-    };
-  }
+    <div class="order-box">
+      <p><strong>Order ID:</strong> ${sessionId}</p>
+      <p><strong>Amount Paid:</strong> ${currency} $${amount}</p>
+      <p><strong>Email:</strong> ${customerEmail}</p>
+      <p><strong>Format:</strong> ePub + PDF (compatible with all e-readers)</p>
+    </div>
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ received: true, type: stripeEvent.type })
-  };
-};
+    <a href="https://www.gutenberg.org" class="download-btn">&#11015; Download Your Books from Project Gutenberg</a>
 
-// ── Send download email via Mailgun ──────────────────────────
-async function sendDownloadEmail(email, bookIds, bundles, sessionId) {
-  const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
-  const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || 'inkandarchives.com';
+    <hr class="divider">
 
-  // Build download links (Project Gutenberg for public domain books)
-  const downloadSection = buildDownloadLinks(bookIds, bundles);
+    <p><strong>How to download your books:</strong></p>
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text">Click the download button above to go to Project Gutenberg — the world's largest library of free public domain books.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-text">Search for your book title or author. All books in Ink &amp; Archives are public domain classics available in ePub and PDF format.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-text">Click "Download this ebook" and choose your preferred format — ePub for Kobo/Apple Books, PDF for any device, or Mobi for Kindle.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-text">Transfer to your e-reader via USB or email the file to your Kindle address. Enjoy your reading!</div>
+    </div>
 
-  const emailBody = `
+    <hr class="divider">
+    <p style="font-size:12px;color:#888">Questions? Reply to this email or contact us at <a href="mailto:hello@inkandarchives.com" style="color:#e8621a">hello@inkandarchives.com</a></p>
+  </div>
+  <div class="footer">
+    <p>Ink &amp; Archives &mdash; inkandarchives.com</p>
+    <p>All books are public domain works published before 1928.</p>
+    <p><a href="https://inkandarchives.com">Visit our store</a></p>
+  </div>
+</div>
+</body>
+</html>`;
+
+    // ── Owner notification email ─────────────────────────────
+    const ownerHTML = `
 <!DOCTYPE html>
 <html>
 <head>
 <style>
-  body { font-family: Georgia, serif; color: #1a1a1a; max-width: 600px; margin: 0 auto; }
-  .header { background: #1a2035; padding: 30px; text-align: center; }
-  .header h1 { color: #c9a84c; margin: 0; font-size: 24px; }
-  .header p { color: #aaa; margin: 5px 0 0; font-size: 12px; }
-  .content { padding: 30px; }
-  .book-item { border: 1px solid #eee; border-radius: 8px; padding: 15px; margin: 10px 0; }
-  .btn { background: #e8621a; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block; margin: 5px 0; }
-  .footer { background: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #888; }
+  body{font-family:Arial,sans-serif;background:#f5f5f5;padding:20px}
+  .wrap{max-width:500px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+  h2{color:#1a2035;margin:0 0 16px}
+  .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;font-size:14px}
+  .label{color:#888}
+  .value{color:#1a2035;font-weight:700}
+  .amount{font-size:24px;color:#e8621a;font-weight:700;text-align:center;margin:16px 0}
 </style>
 </head>
 <body>
-  <div class="header">
-    <h1>INK & ARCHIVES</h1>
-    <p>Your downloads are ready</p>
-  </div>
-  <div class="content">
-    <p>Thank you for your purchase! Your public domain books are ready to download.</p>
-    <p><strong>Order ID:</strong> ${sessionId}</p>
-    ${downloadSection}
-    <p style="margin-top:20px;color:#888;font-size:13px">
-      All books are public domain works published before 1928. 
-      Files are in ePub and PDF format, compatible with all e-readers.
-    </p>
-  </div>
-  <div class="footer">
-    <p>Ink & Archives — inkandarchives.com</p>
-    <p>Questions? Reply to this email.</p>
-  </div>
+<div class="wrap">
+  <h2>&#128200; New Sale — Ink &amp; Archives</h2>
+  <div class="amount">${currency} $${amount}</div>
+  <div class="row"><span class="label">Customer</span><span class="value">${customerName}</span></div>
+  <div class="row"><span class="label">Email</span><span class="value">${customerEmail}</span></div>
+  <div class="row"><span class="label">Amount</span><span class="value">${currency} $${amount}</span></div>
+  <div class="row"><span class="label">Order ID</span><span class="value">${sessionId}</span></div>
+  <div class="row"><span class="label">Time</span><span class="value">${new Date().toUTCString()}</span></div>
+  <p style="margin-top:16px;font-size:12px;color:#888">Login to <a href="https://dashboard.stripe.com">Stripe Dashboard</a> to view full order details.</p>
+</div>
 </body>
-</html>
-  `;
+</html>`;
 
-  try {
-    const formData = new URLSearchParams();
-    formData.append('from', `Ink & Archives <orders@${MAILGUN_DOMAIN}>`);
-    formData.append('to', email);
-    formData.append('subject', 'Your Ink & Archives Downloads Are Ready');
-    formData.append('html', emailBody);
+    try {
+      // Send to customer
+      await transporter.sendMail({
+        from: `"Ink & Archives" <${process.env.ZOHO_SMTP_USER}>`,
+        to: customerEmail,
+        subject: `Your Ink & Archives Order is Confirmed — Download Ready`,
+        html: customerHTML
+      });
+      console.log('Customer email sent to:', customerEmail);
 
-    const response = await fetch(
-      `https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Basic ' + Buffer.from(`api:${MAILGUN_API_KEY}`).toString('base64'),
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: formData.toString()
-      }
-    );
+      // Send to owner
+      await transporter.sendMail({
+        from: `"Ink & Archives Orders" <${process.env.ZOHO_SMTP_USER}>`,
+        to: ownerEmail,
+        subject: `New Sale: ${currency} $${amount} from ${customerName}`,
+        html: ownerHTML
+      });
+      console.log('Owner notification sent to:', ownerEmail);
 
-    if (response.ok) {
-      console.log('Download email sent to:', email);
-    } else {
-      console.error('Email failed:', await response.text());
+    } catch (emailErr) {
+      console.error('Email send error:', emailErr.message);
     }
-  } catch (err) {
-    console.error('Email error:', err.message);
-  }
-}
-
-// ── Build download links from Project Gutenberg ──────────────
-function buildDownloadLinks(bookIds, bundles) {
-  let html = '';
-
-  // For bundles
-  if (bundles) {
-    const bundleNames = {
-      classics:   'Complete Classics Bundle (20 Books)',
-      allaccess:  'ALL ACCESS PASS (All 1,255 Books)',
-      gothic:     'Gothic & Horror Pack (15 Books)',
-      philosophy: 'Ancient Philosophy Bundle'
-    };
-    bundles.split(',').filter(Boolean).forEach(key => {
-      html += `
-        <div class="book-item">
-          <strong style="color:#c9a84c">&#127981; ${bundleNames[key] || key}</strong>
-          <p style="font-size:13px;margin:8px 0">Download all books from Project Gutenberg:</p>
-          <a class="btn" href="https://www.gutenberg.org" target="_blank">Browse on Project Gutenberg</a>
-          <a class="btn" style="background:#c9a84c;color:#1a1a1a" href="https://librivox.org" target="_blank">&#127911; Listen on LibriVox</a>
-        </div>`;
-    });
   }
 
-  // For individual books - link to Project Gutenberg search
-  if (bookIds) {
-    // In a real implementation, you'd have a mapping of bookId -> Gutenberg ID
-    // For now we link to the search
-    html += `
-      <div class="book-item">
-        <strong>Your Books</strong>
-        <p style="font-size:13px;margin:8px 0">Download your books from Project Gutenberg (free, legal, no DRM):</p>
-        <a class="btn" href="https://www.gutenberg.org/ebooks/search/" target="_blank">&#128218; Download from Project Gutenberg</a>
-        <a class="btn" style="background:#1a2035;color:#fff" href="https://librivox.org/search" target="_blank">&#127911; Listen on LibriVox</a>
-      </div>`;
-  }
-
-  return html || '<p>Your download links will be emailed within 24 hours.</p>';
-}
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ received: true })
+  };
+};
