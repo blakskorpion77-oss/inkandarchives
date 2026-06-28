@@ -583,10 +583,10 @@ select.fi{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns=
         <h2>Pride and Prejudice</h2>
         <p>by Jane Austen &mdash; January 2025</p>
         <div class="botm-desc">Elizabeth Bennet and the proud Mr Darcy clash and fall in love in Regency England. Austen's most beloved and perfectly constructed novel &mdash; a timeless masterpiece of wit, romance and social observation.</div>
-        <div class="botm-price">$0.99 <span style="font-size:14px;color:#888;font-weight:400;text-decoration:line-through">$1.49</span></div>
+        <div class="botm-price">$8.99 <span style="font-size:14px;color:#888;font-weight:400;text-decoration:line-through">$14.99</span></div>
         <div class="botm-btns">
           <button class="botm-btn" onclick="openModalById('Q001')">&#128218; View Book</button>
-          <button class="botm-btn outline" onclick="openModalById('Q001')">&#9432; Details</button>
+          <button class="botm-btn" style="background:#1a2035" onclick="window.location.href='https://buy.stripe.com/4gM5kDc7HbIV02y3YD8N207'">&#128274; Buy $8.99</button>
         </div>
       </div>
     </div>
@@ -3285,9 +3285,56 @@ renderGrid(filteredBooks());
           aUtt.lang='en-US';
           try{
             var vs=aSyn.getVoices();
-            for(var v=0;v<vs.length;v++){
-              if(vs[v].lang && vs[v].lang.indexOf('en')===0){ aUtt.voice=vs[v]; break; }
+            var chosen=null;
+            // Priority list of best female voices across browsers/OS
+            var femaleNames=[
+              'Samantha',       // macOS/iOS - best quality
+              'Karen',          // macOS Australian
+              'Moira',          // macOS Irish
+              'Tessa',          // macOS South African
+              'Veena',          // macOS Indian
+              'Victoria',       // macOS
+              'Serena',         // iOS
+              'Google UK English Female', // Chrome on Windows - excellent
+              'Google US English',        // Chrome fallback
+              'Microsoft Zira',           // Windows - clear female voice
+              'Microsoft Hazel',          // Windows UK female
+              'Microsoft Susan',          // Windows
+              'Microsoft Eva',            // Windows
+              'Microsoft Jenny',          // Windows Neural
+              'Fiona',          // macOS Scottish
+              'Allison',        // macOS
+              'Ava',            // macOS
+              'Susan'           // various
+            ];
+            // Try to find a preferred female voice by name
+            for(var fn=0;fn<femaleNames.length;fn++){
+              for(var v=0;v<vs.length;v++){
+                if(vs[v].name && vs[v].name.indexOf(femaleNames[fn])!==-1){
+                  chosen=vs[v]; break;
+                }
+              }
+              if(chosen) break;
             }
+            // Fallback: pick any English female voice
+            if(!chosen){
+              for(var v=0;v<vs.length;v++){
+                var n=(vs[v].name||'').toLowerCase();
+                var l=(vs[v].lang||'');
+                if(l.indexOf('en')===0 && (n.indexOf('female')!==-1||n.indexOf('woman')!==-1||n.indexOf('girl')!==-1)){
+                  chosen=vs[v]; break;
+                }
+              }
+            }
+            // Final fallback: any English voice
+            if(!chosen){
+              for(var v=0;v<vs.length;v++){
+                if(vs[v].lang && vs[v].lang.indexOf('en')===0){ chosen=vs[v]; break; }
+              }
+            }
+            if(chosen) aUtt.voice=chosen;
+            aUtt.pitch=1.05;  // Slightly higher pitch for more natural female tone
+            aUtt.rate=0.92;   // Slightly slower for clearer narration
           }catch(e){}
           aUtt.onstart=function(){ aBtn('&#9646;&#9646; Pause'); aStat('Playing...'); };
           aUtt.onend=function(){ aBtn('&#9654; Play'); aStat('Finished'); aUtt=null; };
